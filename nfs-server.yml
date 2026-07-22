@@ -1,0 +1,76 @@
+---
+- name: Сбор фактов с client
+  hosts: client-nfs
+  gather_facts: true
+
+- name: Настройка NFS сервера
+  hosts: server-nfs
+  become: true
+  vars:
+    nfs_share_dir: /srv/share
+    nfs_upload_dir: "{{ nfs_share_dir }}/upload"
+    nfs_client_network: "{{ hostvars['client-nfs']['ansible_default_ipv4']['address'] }}"
+    nfs_export_options: rw,sync,root_squash
+
+
+  tasks:
+    - name: Установка пакетов
+      ansible.builtin.apt:
+        name:
+          - nfs-kernel-server
+        state: present
+        update_cache: true
+
+    - name: Запуск и включение в автозагрузку
+      ansible.builtin.systemd:
+        name: nfs-kernel-server
+        state: started
+        enabled: true
+
+    - name: Создание основной директории 
+      ansible.builtin.file:
+        path: "{{ nfs_share_dir }}"
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: "0755"
+
+    - name: Создание директории upload
+      ansible.builtin.file:
+        path: "{{ nfs_upload_dir }}"
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: "0777"
+
+    - name: Настройка экспорта директории
+      ansible.builtin.lineinfile:
+        path: /etc/exports
+        line: "{{ nfs_share_dir }} {{ nfs_client_network }}({{ nfs_export_options }})"
+        state: present
+        create: true
+        regexp: "^{{ nfs_share_dir }}"
+      notify: restart nfs-server
+
+    - name: Экспорт директории
+      ansible.builtin.shell: 
+        cmd: exportfs -r
+      changed_when: false
+
+    - name: Получение информации об экспортированных директориях
+      ansible.builtin.shell: 
+        cmd: exportfs -s
+      register: exportfs_output
+      changed_when: false
+
+    - name: Вывод информации об директориях
+      ansible.builtin.debug:
+        msg: "{{ exportfs_output.stdout_lines }}"
+
+  handlers:
+    - name: restart nfs-server
+      ansible.builtin.systemd:
+        name: nfs-kernel-server
+        state: restarted
+
+

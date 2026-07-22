@@ -1,0 +1,61 @@
+---
+- name: Сбор фактов с сервера
+  hosts: server-nfs
+  gather_facts: true
+
+- name: Настройка клиента
+  hosts: client-nfs
+  become: true
+  vars:
+    nfs_server_ip: "{{ hostvars['server-nfs']['ansible_default_ipv4']['address'] }}"
+    nfs_share_dir: /srv/share
+    nfs_mount_point: /mnt
+    nfs_version: "3"
+    nfs_mount_options: "vers={{ nfs_version }},noauto,x-systemd.automount"
+  tasks:
+    - name: Установка пакетов NFS клиента
+      ansible.builtin.apt:
+        name:
+          - nfs-common
+        state: present
+        update_cache: true
+
+    - name: Создание точки монтирования
+      ansible.builtin.file:
+        path: "{{ nfs_mount_point }}"
+        state: directory
+        mode: "0755"
+
+    - name: Добавление автомонтирования в /etc/fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "{{ nfs_server_ip }}:{{ nfs_share_dir }} {{ nfs_mount_point }} nfs {{ nfs_mount_options }} 0 0"
+        state: present
+        regexp: "^{{ nfs_server_ip }}:{{ nfs_share_dir }}"
+      notify: restart remote-fs
+
+    - name: Запуск и включение remote-fs.target
+      ansible.builtin.systemd:
+        name: remote-fs.target
+        state: started
+        enabled: true
+
+    - name: Перезагрузка systemd
+      ansible.builtin.command: systemctl daemon-reload
+      changed_when: false
+
+    - name: Проверка монтирования 
+      ansible.builtin.shell: mount | grep mnt
+      register: mount_output
+      changed_when: false
+      failed_when: false
+
+    - name: Вывод результата монтирования
+      ansible.builtin.debug:
+        msg: "{{ mount_output.stdout_lines }}"
+
+  handlers:
+    - name: restart remote-fs
+      ansible.builtin.systemd:
+        name: remote-fs.target
+        state: restarted
